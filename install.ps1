@@ -1,13 +1,23 @@
 # Windows Terminal Dev Setup
 # Windows Terminal + PowerShell 7 + Starship + Nerd Font
 # + Yazi + zoxide + eza + bat
-# + cmd AutoRun jump to Windows Terminal PowerShell 7
+# + optional cmd AutoRun jump to Windows Terminal PowerShell 7
+
+param(
+    [switch]$EnableCmdAutoRun,
+    [switch]$OverrideBuiltinAliases
+)
 
 $ErrorActionPreference = 'Stop'
 
+$script:SetupState = [pscustomobject]@{}
+$script:StateDir = Join-Path $env:LOCALAPPDATA 'WindowsTerminalStarshipSetup'
+$script:StatePath = Join-Path $script:StateDir 'state.json'
+$script:RepoRawBaseUrl = 'https://raw.githubusercontent.com/waynewang6660/windows-terminal-starship-setup/main'
+
 function Write-Step {
     param([string]$Message)
-    Write-Host ""
+    Write-Host ''
     Write-Host "==> $Message" -ForegroundColor Cyan
 }
 
@@ -24,6 +34,50 @@ function Write-Warn {
 function Test-Command {
     param([string]$Name)
     return [bool](Get-Command $Name -ErrorAction SilentlyContinue)
+}
+
+function Ensure-StateDir {
+    New-Item -ItemType Directory -Path $script:StateDir -Force | Out-Null
+}
+
+function Set-StateValue {
+    param(
+        [string]$Name,
+        $Value
+    )
+
+    if ($script:SetupState.PSObject.Properties.Name -contains $Name) {
+        $script:SetupState.$Name = $Value
+    } else {
+        $script:SetupState | Add-Member -NotePropertyName $Name -NotePropertyValue $Value -Force
+    }
+}
+
+function Save-State {
+    Ensure-StateDir
+    $script:SetupState | ConvertTo-Json -Depth 10 | Set-Content -Path $script:StatePath -Encoding UTF8
+}
+
+function Get-RegistryValue {
+    param(
+        [string]$Path,
+        [string]$Name
+    )
+
+    if (-not (Test-Path $Path)) {
+        return $null
+    }
+
+    $item = Get-ItemProperty -Path $Path -Name $Name -ErrorAction SilentlyContinue
+    if ($null -eq $item) {
+        return $null
+    }
+
+    if ($item.PSObject.Properties.Name -contains $Name) {
+        return $item.$Name
+    }
+
+    return $null
 }
 
 function Refresh-Path {
@@ -62,6 +116,21 @@ function Install-WingetPackage {
         Write-Warn "Failed or already installed: $Name"
         Write-Warn $_.Exception.Message
     }
+}
+
+function Get-LatestBackup {
+    param(
+        [string]$Directory,
+        [string]$Filter
+    )
+
+    if (-not (Test-Path $Directory)) {
+        return $null
+    }
+
+    return Get-ChildItem $Directory -Filter $Filter -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -First 1
 }
 
 Write-Step 'Checking winget'
@@ -103,25 +172,21 @@ if (Test-Path $starshipConfig) {
     $backup = "$starshipConfig.bak.$(Get-Date -Format 'yyyyMMdd_HHmmss')"
     Copy-Item $starshipConfig $backup -Force
     Write-Warn "Existing starship.toml backed up to: $backup"
+    Set-StateValue 'StarshipConfigBackup' $backup
 }
 
-$starshipUrl = 'https://raw.githubusercontent.com/justhalfbit/ghostty-terminal-config/main/starship/starship.toml'
+$localStarship = $null
+if ($PSScriptRoot) {
+    $localStarship = Join-Path $PSScriptRoot 'starship.toml'
+}
 
-try {
+if ($localStarship -and (Test-Path $localStarship)) {
+    Copy-Item $localStarship $starshipConfig -Force
+    Write-Ok "Copied vendored Starship config to: $starshipConfig"
+} else {
+    $starshipUrl = "$script:RepoRawBaseUrl/starship.toml"
     Invoke-WebRequest -Uri $starshipUrl -OutFile $starshipConfig
-    Write-Ok "Downloaded Starship config to: $starshipConfig"
-} catch {
-    Write-Warn 'Failed to download remote starship.toml. Trying built-in Starship preset.'
-
-    Refresh-Path
-
-    if (Test-Command starship) {
-        starship preset catppuccin-powerline -o $starshipConfig
-        Write-Ok 'Generated catppuccin-powerline preset.'
-    } else {
-        Write-Warn 'starship command not found in current session. Reopen terminal and run:'
-        Write-Host "starship preset catppuccin-powerline -o `"$starshipConfig`""
-    }
+    Write-Ok "Downloaded Starship config from this repository to: $starshipConfig"
 }
 
 Write-Step 'Configuring Yazi file detection'
@@ -180,32 +245,36 @@ if (Get-Command zoxide -ErrorAction SilentlyContinue) {
     Invoke-Expression (& { (zoxide init powershell | Out-String) })
 }
 
-# Remove built-in aliases so eza can take over.
-Remove-Item Alias:ls -ErrorAction SilentlyContinue
-Remove-Item Alias:dir -ErrorAction SilentlyContinue
-
-function ls {
-    eza --icons --group-directories-first @args
-}
-
 function ll {
-    eza -l --icons --group-directories-first @args
+    if (Get-Command eza -ErrorAction SilentlyContinue) {
+        eza -l --icons --group-directories-first @args
+    } else {
+        Get-ChildItem @args
+    }
 }
 
 function la {
-    eza -la --icons --group-directories-first @args
+    if (Get-Command eza -ErrorAction SilentlyContinue) {
+        eza -la --icons --group-directories-first @args
+    } else {
+        Get-ChildItem -Force @args
+    }
 }
 
 function lt {
-    eza --tree --icons --level=2 @args
+    if (Get-Command eza -ErrorAction SilentlyContinue) {
+        eza --tree --icons --level=2 @args
+    } else {
+        Get-ChildItem -Recurse @args
+    }
 }
 
-function cat {
-    bat --paging=never @args
-}
-
-# Open Yazi and cd to the last directory after exit.
 function y {
+    if (-not (Get-Command yazi -ErrorAction SilentlyContinue)) {
+        Write-Host 'yazi is not installed yet.' -ForegroundColor Yellow
+        return
+    }
+
     $tmp = New-TemporaryFile
 
     try {
@@ -227,6 +296,42 @@ function y {
 # <<< windows-terminal-starship-yazi <<<
 '@
 
+if ($OverrideBuiltinAliases) {
+    $profileBlock += @'
+
+function Remove-BuiltinAliasOnly {
+    param(
+        [string]$Name,
+        [string[]]$BuiltinDefinitions
+    )
+
+    $alias = Get-Alias -Name $Name -ErrorAction SilentlyContinue
+    if ($null -ne $alias -and $BuiltinDefinitions -contains $alias.Definition) {
+        Remove-Item "Alias:$Name" -ErrorAction SilentlyContinue
+    }
+}
+
+Remove-BuiltinAliasOnly -Name 'ls' -BuiltinDefinitions @('Get-ChildItem', 'ls', 'dir')
+Remove-BuiltinAliasOnly -Name 'dir' -BuiltinDefinitions @('Get-ChildItem', 'ls', 'dir')
+
+function ls {
+    if (Get-Command eza -ErrorAction SilentlyContinue) {
+        eza --icons --group-directories-first @args
+    } else {
+        Get-ChildItem @args
+    }
+}
+
+function cat {
+    if (Get-Command bat -ErrorAction SilentlyContinue) {
+        bat --paging=never @args
+    } else {
+        Get-Content @args
+    }
+}
+'@
+}
+
 Set-Content -Path $pwshProfile -Value ($profileContent.TrimEnd() + "`r`n" + $profileBlock) -Encoding UTF8
 
 Write-Ok "PowerShell 7 profile configured: $pwshProfile"
@@ -244,6 +349,7 @@ if ($wtSettings) {
     try {
         $wtBackup = "$wtSettings.pre-wt-starship-yazi.bak.$(Get-Date -Format 'yyyyMMdd_HHmmss')"
         Copy-Item $wtSettings $wtBackup -Force
+        Set-StateValue 'WindowsTerminalSettingsBackup' $wtBackup
 
         $json = Get-Content $wtSettings -Raw | ConvertFrom-Json
         $profiles = @($json.profiles.list)
@@ -311,7 +417,7 @@ try {
     Write-Warn $_.Exception.Message
 }
 
-Write-Step 'Configuring cmd AutoRun jump to Windows Terminal PowerShell 7'
+Write-Step 'Configuring cmd AutoRun'
 
 try {
     $cmdKey = 'HKCU:\Software\Microsoft\Command Processor'
@@ -320,20 +426,38 @@ try {
         New-Item -Path $cmdKey -Force | Out-Null
     }
 
-    $cmdAutoRun = 'if not defined WT_SESSION (start "" wt -p "PowerShell" -d "%CD%" & exit)'
+    $currentAutoRun = Get-RegistryValue -Path $cmdKey -Name 'AutoRun'
+    if ($null -ne $currentAutoRun) {
+        Set-StateValue 'CmdAutoRunWasPresent' $true
+        Set-StateValue 'CmdAutoRunOriginalValue' $currentAutoRun
+    } else {
+        Set-StateValue 'CmdAutoRunWasPresent' $false
+    }
 
-    New-ItemProperty `
-        -Path $cmdKey `
-        -Name 'AutoRun' `
-        -Value $cmdAutoRun `
-        -PropertyType String `
-        -Force | Out-Null
+    if ($EnableCmdAutoRun) {
+        $cmdAutoRun = 'if not defined WT_SESSION (start "" wt -p "PowerShell" -d "%CD%" & exit)'
 
-    Write-Ok 'cmd AutoRun configured.'
-    Write-Warn "Tip: use 'cmd /d' if you need to bypass AutoRun temporarily."
+        New-ItemProperty `
+            -Path $cmdKey `
+            -Name 'AutoRun' `
+            -Value $cmdAutoRun `
+            -PropertyType String `
+            -Force | Out-Null
+
+        Set-StateValue 'CmdAutoRunEnabled' $true
+        Write-Ok 'cmd AutoRun configured.'
+        Write-Warn "Tip: use 'cmd /d' if you need to bypass AutoRun temporarily."
+    } else {
+        Set-StateValue 'CmdAutoRunEnabled' $false
+        Write-Warn 'cmd AutoRun was not enabled. Re-run with -EnableCmdAutoRun if you want the redirect.'
+    }
 } catch {
     Write-Warn 'Failed to configure cmd AutoRun.'
     Write-Warn $_.Exception.Message
+}
+
+if ($script:SetupState.PSObject.Properties.Count -gt 0) {
+    Save-State
 }
 
 Write-Step 'Done'
@@ -347,8 +471,9 @@ Write-Host '  starship --version'
 Write-Host '  yazi'
 Write-Host '  y'
 Write-Host '  z workf'
-Write-Host '  ls'
 Write-Host '  ll'
+Write-Host '  la'
+Write-Host '  lt'
 Write-Host '  eza --version'
 Write-Host '  bat --version'
 Write-Host ''

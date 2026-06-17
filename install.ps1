@@ -15,6 +15,25 @@ $script:StateDir = Join-Path $env:LOCALAPPDATA 'WindowsTerminalStarshipSetup'
 $script:StatePath = Join-Path $script:StateDir 'state.json'
 $script:RepoRawBaseUrl = 'https://raw.githubusercontent.com/waynewang6660/windows-terminal-starship-setup/main'
 
+function Load-State {
+    if (-not (Test-Path $script:StatePath)) {
+        return [pscustomobject]@{}
+    }
+
+    try {
+        $state = Get-Content $script:StatePath -Raw | ConvertFrom-Json
+        if ($null -eq $state) {
+            return [pscustomobject]@{}
+        }
+
+        return $state
+    } catch {
+        return [pscustomobject]@{}
+    }
+}
+
+$script:SetupState = Load-State
+
 function Write-Step {
     param([string]$Message)
     Write-Host ''
@@ -118,21 +137,6 @@ function Install-WingetPackage {
     }
 }
 
-function Get-LatestBackup {
-    param(
-        [string]$Directory,
-        [string]$Filter
-    )
-
-    if (-not (Test-Path $Directory)) {
-        return $null
-    }
-
-    return Get-ChildItem $Directory -Filter $Filter -ErrorAction SilentlyContinue |
-        Sort-Object LastWriteTime -Descending |
-        Select-Object -First 1
-}
-
 Write-Step 'Checking winget'
 
 if (-not (Test-Command winget)) {
@@ -190,6 +194,16 @@ if ($localStarship -and (Test-Path $localStarship)) {
 }
 
 Write-Step 'Configuring Yazi file detection'
+
+if (-not ($script:SetupState.PSObject.Properties.Name -contains 'YaziFileOneWasPresent')) {
+    $currentYaziFileOne = [Environment]::GetEnvironmentVariable('YAZI_FILE_ONE', 'User')
+    if ($null -ne $currentYaziFileOne) {
+        Set-StateValue 'YaziFileOneWasPresent' $true
+        Set-StateValue 'YaziFileOneOriginalValue' $currentYaziFileOne
+    } else {
+        Set-StateValue 'YaziFileOneWasPresent' $false
+    }
+}
 
 $gitFileExeCandidates = @(
     'C:\Program Files\Git\usr\bin\file.exe',
@@ -313,6 +327,7 @@ function Remove-BuiltinAliasOnly {
 
 Remove-BuiltinAliasOnly -Name 'ls' -BuiltinDefinitions @('Get-ChildItem', 'ls', 'dir')
 Remove-BuiltinAliasOnly -Name 'dir' -BuiltinDefinitions @('Get-ChildItem', 'ls', 'dir')
+Remove-BuiltinAliasOnly -Name 'cat' -BuiltinDefinitions @('Get-Content', 'cat')
 
 function ls {
     if (Get-Command eza -ErrorAction SilentlyContinue) {
@@ -320,6 +335,10 @@ function ls {
     } else {
         Get-ChildItem @args
     }
+}
+
+function dir {
+    ls @args
 }
 
 function cat {
@@ -347,9 +366,11 @@ $wtSettings = $wtSettingsCandidates | Where-Object { Test-Path $_ } | Select-Obj
 
 if ($wtSettings) {
     try {
-        $wtBackup = "$wtSettings.pre-wt-starship-yazi.bak.$(Get-Date -Format 'yyyyMMdd_HHmmss')"
-        Copy-Item $wtSettings $wtBackup -Force
-        Set-StateValue 'WindowsTerminalSettingsBackup' $wtBackup
+        if (-not ($script:SetupState.PSObject.Properties.Name -contains 'WindowsTerminalSettingsBackup')) {
+            $wtBackup = "$wtSettings.pre-wt-starship-yazi.bak.$(Get-Date -Format 'yyyyMMdd_HHmmss')"
+            Copy-Item $wtSettings $wtBackup -Force
+            Set-StateValue 'WindowsTerminalSettingsBackup' $wtBackup
+        }
 
         $json = Get-Content $wtSettings -Raw | ConvertFrom-Json
         $profiles = @($json.profiles.list)
@@ -392,6 +413,26 @@ Write-Step 'Setting Windows Terminal as default terminal application'
 
 try {
     $startupKey = 'HKCU:\Console\%%Startup'
+
+    if (-not ($script:SetupState.PSObject.Properties.Name -contains 'DelegationConsoleWasPresent')) {
+        $currentDelegationConsole = Get-RegistryValue -Path $startupKey -Name 'DelegationConsole'
+        if ($null -ne $currentDelegationConsole) {
+            Set-StateValue 'DelegationConsoleWasPresent' $true
+            Set-StateValue 'DelegationConsoleOriginalValue' $currentDelegationConsole
+        } else {
+            Set-StateValue 'DelegationConsoleWasPresent' $false
+        }
+    }
+
+    if (-not ($script:SetupState.PSObject.Properties.Name -contains 'DelegationTerminalWasPresent')) {
+        $currentDelegationTerminal = Get-RegistryValue -Path $startupKey -Name 'DelegationTerminal'
+        if ($null -ne $currentDelegationTerminal) {
+            Set-StateValue 'DelegationTerminalWasPresent' $true
+            Set-StateValue 'DelegationTerminalOriginalValue' $currentDelegationTerminal
+        } else {
+            Set-StateValue 'DelegationTerminalWasPresent' $false
+        }
+    }
 
     if (-not (Test-Path $startupKey)) {
         New-Item -Path $startupKey -Force | Out-Null

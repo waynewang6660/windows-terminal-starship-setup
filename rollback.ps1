@@ -33,7 +33,11 @@ function Load-State {
         return $null
     }
 
-    return Get-Content $script:StatePath -Raw | ConvertFrom-Json
+    try {
+        return Get-Content $script:StatePath -Raw | ConvertFrom-Json
+    } catch {
+        return $null
+    }
 }
 
 function Remove-ProfileBlock {
@@ -101,7 +105,30 @@ function Restore-FileFromBackup {
     Write-Ok "Restored $Label from: $($source.FullName)"
 }
 
-Write-Step 'Removing cmd AutoRun'
+function Restore-RegistryValue {
+    param(
+        [string]$Path,
+        [string]$Name,
+        [bool]$WasPresent,
+        $OriginalValue,
+        [string]$Label
+    )
+
+    if ($WasPresent) {
+        New-ItemProperty `
+            -Path $Path `
+            -Name $Name `
+            -Value $OriginalValue `
+            -PropertyType String `
+            -Force | Out-Null
+        Write-Ok "Restored $Label."
+    } else {
+        Remove-ItemProperty -Path $Path -Name $Name -ErrorAction SilentlyContinue
+        Write-Ok "Removed $Label."
+    }
+}
+
+Write-Step 'Restoring cmd AutoRun'
 
 try {
     $cmdKey = 'HKCU:\Software\Microsoft\Command Processor'
@@ -122,8 +149,7 @@ try {
                 Write-Ok 'Removed cmd AutoRun.'
             }
         } else {
-            Remove-ItemProperty -Path $cmdKey -Name 'AutoRun' -ErrorAction SilentlyContinue
-            Write-Warn 'No install state found. Removed cmd AutoRun as a fallback.'
+            Write-Warn 'No install state found. Leaving cmd AutoRun unchanged.'
         }
     } else {
         Write-Warn 'Command Processor registry key not found.'
@@ -133,20 +159,29 @@ try {
     Write-Warn $_.Exception.Message
 }
 
-Write-Step 'Removing Windows Terminal default terminal delegation values'
+Write-Step 'Restoring Windows Terminal default terminal delegation values'
 
 try {
     $startupKey = 'HKCU:\Console\%%Startup'
+    $state = Load-State
 
     if (Test-Path $startupKey) {
-        Remove-ItemProperty -Path $startupKey -Name 'DelegationConsole' -ErrorAction SilentlyContinue
-        Remove-ItemProperty -Path $startupKey -Name 'DelegationTerminal' -ErrorAction SilentlyContinue
-        Write-Ok 'Removed default terminal delegation values.'
+        if ($null -ne $state -and $state.PSObject.Properties.Name -contains 'DelegationConsoleWasPresent') {
+            Restore-RegistryValue -Path $startupKey -Name 'DelegationConsole' -WasPresent ([bool]$state.DelegationConsoleWasPresent) -OriginalValue $state.DelegationConsoleOriginalValue -Label 'DelegationConsole'
+        } else {
+            Write-Warn 'No recorded DelegationConsole state found. Leaving it unchanged.'
+        }
+
+        if ($null -ne $state -and $state.PSObject.Properties.Name -contains 'DelegationTerminalWasPresent') {
+            Restore-RegistryValue -Path $startupKey -Name 'DelegationTerminal' -WasPresent ([bool]$state.DelegationTerminalWasPresent) -OriginalValue $state.DelegationTerminalOriginalValue -Label 'DelegationTerminal'
+        } else {
+            Write-Warn 'No recorded DelegationTerminal state found. Leaving it unchanged.'
+        }
     } else {
         Write-Warn 'Default terminal startup registry key not found.'
     }
 } catch {
-    Write-Warn 'Failed to remove default terminal delegation values.'
+    Write-Warn 'Failed to restore default terminal delegation values.'
     Write-Warn $_.Exception.Message
 }
 
@@ -163,11 +198,10 @@ Write-Step 'Restoring Starship config backup'
 $starshipConfig = Join-Path (Join-Path $HOME '.config') 'starship.toml'
 $state = Load-State
 
-if ($null -ne $state -and $state.PSObject.Properties.Name -contains 'StarshipConfigBackup') {
+if ($null -ne $state -and $state.PSObject.Properties.Name -contains 'StarshipConfigBackup' -and (Test-Path $state.StarshipConfigBackup)) {
     Restore-FileFromBackup -TargetPath $starshipConfig -BackupPath $state.StarshipConfigBackup -Label 'starship.toml'
 } else {
-    $starshipDir = Split-Path $starshipConfig -Parent
-    Restore-FileFromBackup -TargetPath $starshipConfig -BackupDirectory $starshipDir -BackupFilter 'starship.toml.bak.*' -Label 'starship.toml'
+    Write-Warn 'No recorded Starship backup found. Leaving starship.toml unchanged.'
 }
 
 Write-Step 'Restoring Windows Terminal settings backup'
@@ -175,20 +209,30 @@ Write-Step 'Restoring Windows Terminal settings backup'
 $wtSettingsDir = Join-Path $env:LOCALAPPDATA 'Packages\Microsoft.WindowsTerminal_8wekyb3d8bbwe\LocalState'
 $wtSettingsPath = Join-Path $wtSettingsDir 'settings.json'
 
-if ($null -ne $state -and $state.PSObject.Properties.Name -contains 'WindowsTerminalSettingsBackup') {
+if ($null -ne $state -and $state.PSObject.Properties.Name -contains 'WindowsTerminalSettingsBackup' -and (Test-Path $state.WindowsTerminalSettingsBackup)) {
     Restore-FileFromBackup -TargetPath $wtSettingsPath -BackupPath $state.WindowsTerminalSettingsBackup -Label 'Windows Terminal settings'
 } else {
-    Restore-FileFromBackup -TargetPath $wtSettingsPath -BackupDirectory $wtSettingsDir -BackupFilter 'settings.json.pre-wt-starship-yazi.bak.*' -Label 'Windows Terminal settings'
+    Write-Warn 'No recorded Windows Terminal settings backup found. Leaving settings.json unchanged.'
 }
 
-Write-Step 'Removing YAZI_FILE_ONE user environment variable'
+Write-Step 'Restoring YAZI_FILE_ONE user environment variable'
 
 try {
-    [Environment]::SetEnvironmentVariable('YAZI_FILE_ONE', $null, 'User')
-    Remove-Item Env:YAZI_FILE_ONE -ErrorAction SilentlyContinue
-    Write-Ok 'Removed YAZI_FILE_ONE.'
+    if ($null -ne $state -and $state.PSObject.Properties.Name -contains 'YaziFileOneWasPresent') {
+        if ($state.YaziFileOneWasPresent) {
+            [Environment]::SetEnvironmentVariable('YAZI_FILE_ONE', $state.YaziFileOneOriginalValue, 'User')
+            $env:YAZI_FILE_ONE = $state.YaziFileOneOriginalValue
+            Write-Ok 'Restored YAZI_FILE_ONE.'
+        } else {
+            [Environment]::SetEnvironmentVariable('YAZI_FILE_ONE', $null, 'User')
+            Remove-Item Env:YAZI_FILE_ONE -ErrorAction SilentlyContinue
+            Write-Ok 'Removed YAZI_FILE_ONE.'
+        }
+    } else {
+        Write-Warn 'No install state found. Leaving YAZI_FILE_ONE unchanged.'
+    }
 } catch {
-    Write-Warn 'Failed to remove YAZI_FILE_ONE.'
+    Write-Warn 'Failed to restore YAZI_FILE_ONE.'
     Write-Warn $_.Exception.Message
 }
 
@@ -204,5 +248,5 @@ Write-Host 'Please close all terminal windows and reopen them.'
 Write-Host ''
 Write-Host 'Notes:' -ForegroundColor Yellow
 Write-Host '  - Installed packages were not uninstalled.'
-Write-Host '  - If a backup was missing, the script fell back to the latest backup in the backup directory.'
+Write-Host '  - If install state or a backup is missing, the script leaves unrelated user values unchanged.'
 Write-Host '  - Use cmd /d to bypass AutoRun if needed before rollback takes effect.'

@@ -9,7 +9,7 @@ This repository packages the setup notes into two ready-to-run PowerShell script
 
 - Windows 10 / Windows 11
 - `winget` available
-- Internet access for package installation and Starship config download
+- Internet access for package installation
 
 ## Run locally
 
@@ -28,29 +28,43 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\rollback.ps1
 After you publish the repo, users can run:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/<your-user>/<your-repo>/main/install.ps1 | iex"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/waynewang6660/windows-terminal-starship-setup/main/install.ps1 | iex"
 ```
 
 Rollback:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/<your-user>/<your-repo>/main/rollback.ps1 | iex"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/waynewang6660/windows-terminal-starship-setup/main/rollback.ps1 | iex"
+```
+
+Safer install:
+
+```powershell
+irm https://raw.githubusercontent.com/waynewang6660/windows-terminal-starship-setup/main/install.ps1 -OutFile install.ps1
+notepad .\install.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
 ## What the install script changes
 
 - Installs the required tools with `winget`
-- Downloads or generates `starship.toml`
+- Uses the vendored `starship.toml` in this repository
 - Configures PowerShell 7 profile helpers
 - Sets `YAZI_FILE_ONE` for better file type detection
 - Updates Windows Terminal defaults where possible
-- Sets `cmd.exe` to jump into Windows Terminal PowerShell 7 by default
+- Can optionally set `cmd.exe` to jump into Windows Terminal PowerShell 7
 
 If you need the original `cmd.exe` behavior temporarily, run:
 
 ```powershell
 cmd /d
 ```
+
+## Security notes
+
+- This script does not read browser passwords, SSH keys, tokens, or upload files.
+- It may install packages through `winget`, modify the current user's PowerShell profile, update Windows Terminal settings, and optionally configure `cmd.exe` AutoRun.
+- For safer installation, download and inspect the script before running it.
 
 ## Notes
 

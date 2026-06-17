@@ -55,11 +55,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -EnableCmdAuto
 
 - Installs the required tools with `winget`
 - Uses the vendored `starship.toml` in this repository
-- Configures PowerShell 7 profile helpers
+- Configures PowerShell 7 profile helpers (`ll`, `la`, `lt`, `y` always; `ls`/`dir`/`cat` only with the optional flag)
 - Sets `YAZI_FILE_ONE` for better file type detection
 - Updates Windows Terminal defaults where possible
 - Can optionally set `cmd.exe` to jump into Windows Terminal PowerShell 7
-- Can optionally override `ls` and `cat` aliases for `eza` and `bat`
+- Can optionally override the built-in `ls`, `dir`, and `cat` aliases for `eza` and `bat`
 
 If you need the original `cmd.exe` behavior temporarily, run:
 
@@ -76,5 +76,6 @@ cmd /d
 ## Notes
 
 - The scripts create backups when editing existing config files.
+- Rollback restores the exact saved `AutoRun`, `YAZI_FILE_ONE`, and Windows Terminal delegation values when state is available.
 - Rollback does not uninstall packages by default.
 - If Windows Terminal icon fonts look broken, set the font manually to `JetBrainsMono Nerd Font` in Terminal settings.

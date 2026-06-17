@@ -45,6 +45,12 @@ notepad .\install.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
+Optional flags:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -EnableCmdAutoRun -OverrideBuiltinAliases
+```
+
 ## What the install script changes
 
 - Installs the required tools with `winget`
@@ -53,6 +59,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
 - Sets `YAZI_FILE_ONE` for better file type detection
 - Updates Windows Terminal defaults where possible
 - Can optionally set `cmd.exe` to jump into Windows Terminal PowerShell 7
+- Can optionally override `ls` and `cat` aliases for `eza` and `bat`
 
 If you need the original `cmd.exe` behavior temporarily, run:
 
